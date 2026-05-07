@@ -54,7 +54,6 @@ To run this project locally:
     ```
 3.  **Environment Configuration**:
     - Copy the template: `cp .env.example .env`
-    - Add your **Gemini API Key** to the `.env` file. You can get a free key at [Google AI Studio](https://aistudio.google.com/app/apikey).
 4.  **Start Dev Server**:
     ```bash
     npm run dev
