@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Primitives ---
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Enterprise Grade Validation Blueprints ---
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['alias', 'coins', 'totalScore', 'updatedAt', 'ownedSkins', 'selectedSkin']) &&
+             (data.keys().size() == 6 || (data.keys().size() == 7 && data.keys().hasAll(['lastDailyClaim']))) &&
+             data.alias is string && data.alias.size() <= 32 &&
+             data.coins is number &&
+             data.totalScore is number &&
+             data.ownedSkins is list &&
+             data.selectedSkin is string &&
+             data.updatedAt == request.time;
+    }
+
+    function isValidScore(data) {
+      return data.keys().hasAll(['userId', 'alias', 'score', 'mode', 'level', 'createdAt']) &&
+             data.keys().size() == 6 &&
+             data.userId == request.auth.uid &&
+             data.alias is string && data.alias.size() <= 32 &&
+             data.score is number &&
+             data.mode in ['easy', 'moderate', 'hard'] &&
+             data.level is number &&
+             data.createdAt == request.time;
+    }
+
+    // --- Collection Routes ---
+
+    match /users/{userId} {
+      // Identity Poisoning Guard
+      allow get: if isOwner(userId);
+      
+      // Strict Identity Rule: User can only create/update their own profile
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      
+      allow update: if isOwner(userId) && 
+                      isValidUser(incoming()) && 
+                      // Immutable fields check (none here, but logic ready)
+                      incoming().updatedAt == request.time &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['alias', 'coins', 'totalScore', 'updatedAt', 'ownedSkins', 'selectedSkin', 'lastDailyClaim']);
+    }
+
+    match /leaderboard/{scoreId} {
+      // Global Leaderboard: Any verified user can see scores
+      // Note: allow list is intentionally open to allow global ranking
+      allow list: if isVerified() && 
+                    // Protect against large field attacks during list (though not stored)
+                    resource.data.score is number;
+      
+      allow get: if isVerified();
+
+      // Create only: Scores are immutable high-scores
+      allow create: if isVerified() && isValidScore(incoming());
+      
+      // No updates or deletions allowed for leaderboard entries (integrity)
+      allow update, delete: if false;
+    }
+  }
+}
